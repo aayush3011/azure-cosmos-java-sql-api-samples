@@ -38,7 +38,6 @@ import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.Map;
-import java.util.HashMap;
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -465,10 +464,7 @@ public class QueriesQuickstartAsync {
         executeQueryWithQuerySpecPrintSingleResult(querySpec);
     }
 
-    // Step 1-4: Create multiple documents (some with duplicate partition keys) and collect latest session tokens per partition.
-    // Uses a dedicated CosmosAsyncClient (writer) and ensures the latest session token per partition key overrides earlier values.
     private Map<String, String>  upsertMultipleDocumentsCollectSessionTokens(String dbName, String containerName, int totalDocuments) {
-        // Use a HashMap to store the latest session token per stringified partition key
         Map<String, String> partitionToSessionToken = new ConcurrentHashMap<>();
 
         // Use a dedicated client instance for creates/upserts
@@ -520,7 +516,6 @@ public class QueriesQuickstartAsync {
                 f.setLastName(pkValue);
                 f.setId(UUID.randomUUID().toString());
 
-                // Convert the typed response into Object to avoid compile-time dependency on CosmosItemResponse in generics.
                 Mono<CosmosItemResponse<Family>> upsertMono = writerContainer
                         .upsertItem(f, new PartitionKey(pkValue), new CosmosItemRequestOptions())
                         .map(response -> {
@@ -663,7 +658,10 @@ public class QueriesQuickstartAsync {
         logger.info("Done with sample.");
     }
 
-    // Full cross-partition query using a compound session token built from multiple partition-specific session tokens
+    // Steps:
+    // 1. Create multiple documents (some with duplicate partition keys) and collect latest session tokens per partition key.
+    // 2. Build a compound session token by concatenating the session tokens using commas present in partitionKeyToLastRecordedSessionToken.
+    // 3. Perform a cross-partition query using the compound session token.
     private void queryCrossPartitionAsyncUsingSessionConsistency() {
         logger.info("Starting cross-partition upserts and session-consistent query.");
         try {

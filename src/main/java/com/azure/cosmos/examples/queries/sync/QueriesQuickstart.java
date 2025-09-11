@@ -455,6 +455,10 @@ public class QueriesQuickstart {
         logger.info("Done with sample.");
     }
 
+    // Steps:
+    // 1. Create multiple documents (some with duplicate partition keys) and collect latest session tokens per partition key.
+    // 2. Build a compound session token by concatenating the session tokens using commas present in partitionKeyToLastRecordedSessionToken.
+    // 3. Perform a cross-partition query using the compound session token.
     private void queryCrossPartitionSyncUsingSessionConsistency() {
         logger.info("Starting cross-partition upserts and session-consistent query (sync).");
 
@@ -494,7 +498,6 @@ public class QueriesQuickstart {
                 f.setId(UUID.randomUUID().toString());
 
                 try {
-                    // Use Object and reflection to avoid compile-time dependency on CosmosItemResponse generics
                     CosmosItemResponse<Family> response = writerContainer.upsertItem(f, new PartitionKey(pkValue), new CosmosItemRequestOptions());
                     String sessionTokenFromUpsert = response.getSessionToken();
 
