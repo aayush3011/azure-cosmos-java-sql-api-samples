@@ -15,6 +15,7 @@ import com.azure.cosmos.models.CosmosContainerResponse;
 import com.azure.cosmos.models.CosmosDatabaseRequestOptions;
 import com.azure.cosmos.models.CosmosDatabaseResponse;
 import com.azure.cosmos.models.CosmosItemRequestOptions;
+import com.azure.cosmos.models.CosmosItemResponse;
 import com.azure.cosmos.models.CosmosQueryRequestOptions;
 import com.azure.cosmos.models.FeedResponse;
 import com.azure.cosmos.models.PartitionKey;
@@ -25,14 +26,21 @@ import com.azure.cosmos.util.CosmosPagedFlux;
 import com.fasterxml.jackson.databind.JsonNode;
 
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.Map;
+import java.util.HashMap;
+import java.util.List;
+import java.util.stream.Collectors;
 
 public class QueriesQuickstartAsync {
 
@@ -115,7 +123,11 @@ public class QueriesQuickstartAsync {
 
         logger.info("Async doc create done.");
 
+        logger.info("Async doc create done.");
+
         //execute all the below query examples asynchronously and waiting until all done
+
+        queryCrossPartitionAsyncUsingSessionConsistency();
         queryAllDocuments();
         queryWithPagingAndContinuationTokenAndPrintQueryCharge(new CosmosQueryRequestOptions());
         queryEquality();
@@ -129,7 +141,6 @@ public class QueriesQuickstartAsync {
         queryStringMathAndArrayOperators();
         queryWithQuerySpec();
         parallelQueryWithPagingAndContinuationTokenAndPrintQueryCharge();
-
 
         // We are adding Thread.sleep to mimic the some business computation that can
         // happen while waiting for earlier processes to finish.
@@ -208,7 +219,7 @@ public class QueriesQuickstartAsync {
                 new CosmosContainerProperties(containerName, "/lastName");
 
         // Provision throughput
-        ThroughputProperties throughputProperties = ThroughputProperties.createManualThroughput(400);
+        ThroughputProperties throughputProperties = ThroughputProperties.createManualThroughput(12000);
 
         //  Create container with 200 RU/s
         CosmosContainerResponse containerResponse = database.createContainerIfNotExists(containerProperties, throughputProperties).block();
@@ -273,9 +284,8 @@ public class QueriesQuickstartAsync {
             for (FeedResponse<Family> page : feedResponseIterator) {
                 logger.info(String.format("Current page number: %d", currentPageNumber));
                  // Access all of the documents in this result page
-                for (Family docProps : page.getResults()) {
-                    documentNumber++;
-                }
+                // Increment documentNumber by the number of results in this page to avoid an unused-variable warning
+                documentNumber += page.getResults().size();
 
                 // Accumulate the request charge of this page
                 requestCharge += page.getRequestCharge();
@@ -359,6 +369,7 @@ public class QueriesQuickstartAsync {
         executeQueryPrintSingleResult("SELECT * FROM Families f WHERE f.LastName = 'Andersen' ORDER BY f.Children[0].Grade");
     }
 
+    @SuppressWarnings("unused")
     private void queryDistinct() throws Exception {
         logger.info("DISTINCT queries");
 
@@ -454,6 +465,169 @@ public class QueriesQuickstartAsync {
         executeQueryWithQuerySpecPrintSingleResult(querySpec);
     }
 
+    // Step 1-4: Create multiple documents (some with duplicate partition keys) and collect latest session tokens per partition.
+    // Uses a dedicated CosmosAsyncClient (writer) and ensures the latest session token per partition key overrides earlier values.
+    private Map<String, String>  upsertMultipleDocumentsCollectSessionTokens(String dbName, String containerName, int totalDocuments) {
+        // Use a HashMap to store the latest session token per stringified partition key
+        Map<String, String> partitionToSessionToken = new ConcurrentHashMap<>();
+
+        // Use a dedicated client instance for creates/upserts
+        try (CosmosAsyncClient writerClient = new CosmosClientBuilder()
+                .endpoint(AccountSettings.HOST)
+                .key(AccountSettings.MASTER_KEY)
+                // Use SESSION consistency for session token semantics
+                .consistencyLevel(ConsistencyLevel.SESSION)
+                .contentResponseOnWriteEnabled(true)
+                .buildAsyncClient()) {
+
+            CosmosAsyncContainer writerContainer = writerClient.getDatabase(dbName).getContainer(containerName);
+
+            // Randomly pick a partition key that will receive 2-3 upserts
+            int duplicateCount = ThreadLocalRandom.current().nextInt(2, 4); // 2 or 3
+            int uniqueNeeded = totalDocuments - duplicateCount;
+
+            // Create a list of unique partition keys
+            List<String> partitionKeys = java.util.stream.IntStream.range(0, uniqueNeeded)
+                    .mapToObj(i -> "LastName_pk_" + i)
+                    .collect(Collectors.toList());
+
+            // Choose one of existing partition keys or create a new one to be duplicated
+            String duplicatePartitionKey;
+            if (partitionKeys.isEmpty()) {
+                duplicatePartitionKey = "LastName_pk_dup_0";
+                partitionKeys.add(duplicatePartitionKey);
+            } else {
+                duplicatePartitionKey = partitionKeys.get(ThreadLocalRandom.current().nextInt(partitionKeys.size()));
+            }
+
+            // Build the actual list of partition-key values for upserts, inserting the duplicate partition key duplicateCount times
+            List<String> upsertPartitionKeys = new ArrayList<>(partitionKeys);
+            for (int i = 0; i < duplicateCount; i++) {
+                upsertPartitionKeys.add(duplicatePartitionKey);
+            }
+
+            // If by any chance we have fewer than requested documents, append additional unique keys
+            int nextSuffix = uniqueNeeded;
+            while (upsertPartitionKeys.size() < totalDocuments) {
+                upsertPartitionKeys.add("LastName_pk_extra_" + nextSuffix++);
+            }
+
+            // Prepare upsert operations and attach callbacks to capture session tokens
+            List<Mono<CosmosItemResponse<Family>>> upserts = new java.util.ArrayList<>();
+
+            for (String pkValue : upsertPartitionKeys) {
+                Family f = new Family();
+                f.setLastName(pkValue);
+                f.setId(UUID.randomUUID().toString());
+
+                // Convert the typed response into Object to avoid compile-time dependency on CosmosItemResponse in generics.
+                Mono<CosmosItemResponse<Family>> upsertMono = writerContainer
+                        .upsertItem(f, new PartitionKey(pkValue), new CosmosItemRequestOptions())
+                        .map(response -> {
+
+                            String sessionTokenFromUpsert = response.getSessionToken();
+
+                            if (sessionTokenFromUpsert == null) {
+                                logger.warn("Upsert response session token is null for partition {}", pkValue);
+                            } else {
+                                partitionToSessionToken.put(pkValue, sessionTokenFromUpsert);
+                                logger.info("Upserted doc id {} on partition {} and updated session token {}", f.getId(), pkValue, sessionTokenFromUpsert);
+                            }
+                            return response;
+                        })
+                        .doOnError(err -> logger.error("Upsert failed for partition {}. Error: {}", pkValue, err.getMessage(), err));
+
+                upserts.add(upsertMono);
+            }
+
+            // Execute all upserts asynchronously and wait for completion. The partitionToSessionToken map will be updated
+            // as each upsert completes (latest session token for a partition overrides previous value).
+            Flux.mergeSequential(upserts).then().block();
+
+        } catch (Exception e) {
+            logger.error("Exception while upserting documents: {}", e.getMessage(), e);
+        }
+
+        return partitionToSessionToken;
+    }
+
+    // Step 5: Build a compound session token by concatenating the session token values in the provided map using commas.
+    private String buildCompoundSessionToken(Map<String, String> partitionSessionTokenMap) {
+        if (partitionSessionTokenMap == null || partitionSessionTokenMap.isEmpty()) {
+            return "";
+        }
+
+        // The compound token is a comma-separated list of the session token values
+        return partitionSessionTokenMap.values().stream()
+                .filter(v -> v != null && !v.isEmpty())
+                .collect(Collectors.joining(","));
+    }
+
+    private void queryWithCompoundSessionTokenAndIteratePages(String dbName, String containerName, String compoundSessionToken) {
+        // Use a dedicated client for queries
+        try (CosmosAsyncClient readerClient = new CosmosClientBuilder()
+                .endpoint(AccountSettings.HOST)
+                .key(AccountSettings.MASTER_KEY)
+                // Use SESSION consistency to honor session tokens
+                .consistencyLevel(ConsistencyLevel.SESSION)
+                .contentResponseOnWriteEnabled(false)
+                .buildAsyncClient()) {
+
+            CosmosAsyncContainer readerContainer = readerClient.getDatabase(dbName).getContainer(containerName);
+
+            CosmosQueryRequestOptions options = new CosmosQueryRequestOptions();
+            // Step 5: Plug in the compound session token
+            options.setSessionToken(compoundSessionToken);
+
+            logger.info("Executing query with compound session token: {}", compoundSessionToken);
+
+            // Use explicit paging with continuation tokens similar to queryWithPagingAndContinuationTokenAndPrintQueryCharge
+            String query = "SELECT * FROM c";
+            int pageSize = 1; // number of docs per page
+            String continuationToken = null;
+            int currentPageNumber = 1;
+            double requestCharge = 0.0;
+
+            do {
+                logger.info("Receiving a set of query response pages.");
+                logger.info("Continuation Token: {}\n", continuationToken);
+
+                Iterable<FeedResponse<Family>> feedResponseIterator =
+                        readerContainer.queryItems(query, options, Family.class).byPage(continuationToken, pageSize).toIterable();
+
+                for (FeedResponse<Family> page : feedResponseIterator) {
+                    logger.info(String.format("Current page number: %d", currentPageNumber));
+
+                    // Log the session token associated with this FeedResponse
+                    String feedSessionToken = page.getSessionToken();
+                    logger.info("FeedResponse.sessionToken={}", feedSessionToken);
+
+                    // Access all of the documents in this result page
+                    for (Family family : page.getResults()) {
+                        logger.info("Query result: id={}, partitionKey={}", family.getId(), family.getLastName());
+                    }
+
+                    // Accumulate the request charge of this page
+                    requestCharge += page.getRequestCharge();
+
+                    // Request charge so far
+                    logger.info(String.format("Total request charge so far: %f\n", requestCharge));
+
+                    // Along with page results, get a continuation token which enables the client to "pick up where it left off"
+                    continuationToken = page.getContinuationToken();
+
+                    currentPageNumber++;
+                }
+
+            } while (continuationToken != null);
+
+            logger.info(String.format("Total request charge: %f\n", requestCharge));
+
+        } catch (Exception e) {
+            logger.error("Exception while querying with compound session token: {}", e.getMessage(), e);
+        }
+    }
+
     // Document delete
     private void deleteADocument() throws Exception {
         logger.info("Delete document {} by ID.", documentId);
@@ -489,4 +663,17 @@ public class QueriesQuickstartAsync {
         logger.info("Done with sample.");
     }
 
+    // Full cross-partition query using a compound session token built from multiple partition-specific session tokens
+    private void queryCrossPartitionAsyncUsingSessionConsistency() {
+        logger.info("Starting cross-partition upserts and session-consistent query.");
+        try {
+            Map<String, String> partitionKeyToLastRecordedSessionToken = upsertMultipleDocumentsCollectSessionTokens(databaseName, containerName, 10);
+
+            String compoundSessionToken = buildCompoundSessionToken(partitionKeyToLastRecordedSessionToken);
+
+            queryWithCompoundSessionTokenAndIteratePages(databaseName, containerName, compoundSessionToken);
+        } catch (Exception ex) {
+            logger.error("Error while performing cross-partition session-consistent query: {}", ex.getMessage(), ex);
+        }
+    }
 }

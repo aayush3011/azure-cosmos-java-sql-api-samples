@@ -794,7 +794,7 @@ public class SampleDocumentationSnippetsAsync {
         // ...
 
         changeFeedProcessorInstance.start()
-                .subscribeOn(Schedulers.elastic())
+                .subscribeOn(Schedulers.boundedElastic())
                 .subscribe();
 
         //  </MigrateCFAsync>
