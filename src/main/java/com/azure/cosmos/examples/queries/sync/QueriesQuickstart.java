@@ -104,19 +104,19 @@ public class QueriesQuickstart {
         createDocument();
 
         queryCrossPartitionSyncUsingSessionConsistency();
-//        queryAllDocuments();
-//        queryWithPagingAndContinuationTokenAndPrintQueryCharge(new CosmosQueryRequestOptions());
-//        queryEquality();
-//        queryInequality();
-//        queryRange();
-//        queryRangeAgainstStrings();
-//        queryOrderBy();
-//        queryWithAggregateFunctions();
-//        querySubdocuments();
-//        queryIntraDocumentJoin();
-//        queryStringMathAndArrayOperators();
-//        queryWithQuerySpec();
-//        parallelQueryWithPagingAndContinuationTokenAndPrintQueryCharge();
+        queryAllDocuments();
+        queryWithPagingAndContinuationTokenAndPrintQueryCharge(new CosmosQueryRequestOptions());
+        queryEquality();
+        queryInequality();
+        queryRange();
+        queryRangeAgainstStrings();
+        queryOrderBy();
+        queryWithAggregateFunctions();
+        querySubdocuments();
+        queryIntraDocumentJoin();
+        queryStringMathAndArrayOperators();
+        queryWithQuerySpec();
+        parallelQueryWithPagingAndContinuationTokenAndPrintQueryCharge();
 
         // deleteDocument() is called at shutdown()
 
