@@ -4,6 +4,7 @@
 package com.azure.cosmos.examples.queries.sync;
 
 import com.azure.cosmos.ConsistencyLevel;
+import com.azure.cosmos.CosmosAsyncClient;
 import com.azure.cosmos.CosmosClient;
 import com.azure.cosmos.CosmosClientBuilder;
 import com.azure.cosmos.CosmosContainer;
@@ -529,41 +530,50 @@ public class QueriesQuickstart {
     }
 
     private void queryWithCompoundSessionTokenAndIteratePages(String databaseName, String containerName, String compoundSessionToken) {
-        // This method is not used in this sample but illustrates how to use a compound session token
-        // to execute a query and iterate over pages of results.
-        CosmosQueryRequestOptions options = new CosmosQueryRequestOptions();
-        options.setSessionToken(compoundSessionToken);
+        try (CosmosClient readerClient = new CosmosClientBuilder()
+                .endpoint(AccountSettings.HOST)
+                .key(AccountSettings.MASTER_KEY)
+                // Use SESSION consistency to honor session tokens
+                .consistencyLevel(ConsistencyLevel.SESSION)
+                .buildClient()) {
 
-        String query = "SELECT * FROM c";
-        int pageSize = 100;
-        String continuationToken = null;
-        int currentPageNumber = 1;
-        double requestCharge = 0.0;
+            CosmosQueryRequestOptions options = new CosmosQueryRequestOptions();
+            options.setSessionToken(compoundSessionToken);
 
-        do {
-            logger.info("Receiving a set of query response pages (sync). ContinuationToken={}", continuationToken);
+            CosmosContainer readerContainer = readerClient.getDatabase(databaseName).getContainer(containerName);
 
-            Iterable<FeedResponse<Family>> feedResponseIterator = container.queryItems(query, options, Family.class).iterableByPage(continuationToken, pageSize);
+            String query = "SELECT * FROM c";
+            int pageSize = 100;
+            String continuationToken = null;
+            int currentPageNumber = 1;
+            double requestCharge = 0.0;
 
-            for (FeedResponse<Family> page : feedResponseIterator) {
-                logger.info(String.format("Current page number: %d", currentPageNumber));
+            do {
+                logger.info("Receiving a set of query response pages (sync). ContinuationToken={}", continuationToken);
 
-                // Log the session token associated with this feed response
-                logger.info("FeedResponse.sessionToken={}", page.getSessionToken());
+                Iterable<FeedResponse<Family>> feedResponseIterator = readerContainer.queryItems(query, options, Family.class).iterableByPage(continuationToken, pageSize);
 
-                for (Family family : page.getResults()) {
-                    logger.info("Query result (sync): id={}, partitionKey={}", family.getId(), family.getLastName());
+                for (FeedResponse<Family> page : feedResponseIterator) {
+                    logger.info(String.format("Current page number: %d", currentPageNumber));
+
+                    logger.info("FeedResponse.sessionToken={}", page.getSessionToken());
+
+                    for (Family family : page.getResults()) {
+                        logger.info("Query result (sync): id={}, partitionKey={}", family.getId(), family.getLastName());
+                    }
+
+                    requestCharge += page.getRequestCharge();
+                    logger.info(String.format("Total request charge so far: %f\n", requestCharge));
+
+                    continuationToken = page.getContinuationToken();
+                    currentPageNumber++;
                 }
 
-                requestCharge += page.getRequestCharge();
-                logger.info(String.format("Total request charge so far: %f\n", requestCharge));
+            } while (continuationToken != null);
 
-                continuationToken = page.getContinuationToken();
-                currentPageNumber++;
-            }
-
-        } while (continuationToken != null);
-
-        logger.info(String.format("Total request charge (sync): %f\n", requestCharge));
+            logger.info(String.format("Total request charge (sync): %f\n", requestCharge));
+        } catch (Exception e) {
+            logger.error("Exception while querying with compound session token: {}", e.getMessage(), e);
+        }
     }
 }

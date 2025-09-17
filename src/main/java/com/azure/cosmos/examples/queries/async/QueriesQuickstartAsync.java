@@ -122,8 +122,6 @@ public class QueriesQuickstartAsync {
 
         logger.info("Async doc create done.");
 
-        logger.info("Async doc create done.");
-
         //execute all the below query examples asynchronously and waiting until all done
 
         queryCrossPartitionAsyncUsingSessionConsistency();
@@ -464,7 +462,7 @@ public class QueriesQuickstartAsync {
         executeQueryWithQuerySpecPrintSingleResult(querySpec);
     }
 
-    private Map<String, String>  upsertMultipleDocumentsCollectSessionTokens(String dbName, String containerName, int totalDocuments) {
+    private Map<String, String> upsertMultipleDocumentsAndCollectSessionTokens(String dbName, String containerName, int totalDocuments) {
         Map<String, String> partitionToSessionToken = new ConcurrentHashMap<>();
 
         // Use a dedicated client instance for creates/upserts
@@ -473,7 +471,6 @@ public class QueriesQuickstartAsync {
                 .key(AccountSettings.MASTER_KEY)
                 // Use SESSION consistency for session token semantics
                 .consistencyLevel(ConsistencyLevel.SESSION)
-                .contentResponseOnWriteEnabled(true)
                 .buildAsyncClient()) {
 
             CosmosAsyncContainer writerContainer = writerClient.getDatabase(dbName).getContainer(containerName);
@@ -509,7 +506,9 @@ public class QueriesQuickstartAsync {
             }
 
             // Prepare upsert operations and attach callbacks to capture session tokens
-            List<Mono<CosmosItemResponse<Family>>> upserts = new java.util.ArrayList<>();
+            List<Mono<CosmosItemResponse<Family>>> upserts = new ArrayList<>();
+
+            CosmosItemRequestOptions requestOptionsForUpsert = new CosmosItemRequestOptions();
 
             for (String pkValue : upsertPartitionKeys) {
                 Family f = new Family();
@@ -517,7 +516,7 @@ public class QueriesQuickstartAsync {
                 f.setId(UUID.randomUUID().toString());
 
                 Mono<CosmosItemResponse<Family>> upsertMono = writerContainer
-                        .upsertItem(f, new PartitionKey(pkValue), new CosmosItemRequestOptions())
+                        .upsertItem(f, new PartitionKey(pkValue), requestOptionsForUpsert)
                         .map(response -> {
 
                             String sessionTokenFromUpsert = response.getSessionToken();
@@ -565,13 +564,12 @@ public class QueriesQuickstartAsync {
                 .key(AccountSettings.MASTER_KEY)
                 // Use SESSION consistency to honor session tokens
                 .consistencyLevel(ConsistencyLevel.SESSION)
-                .contentResponseOnWriteEnabled(false)
                 .buildAsyncClient()) {
 
             CosmosAsyncContainer readerContainer = readerClient.getDatabase(dbName).getContainer(containerName);
 
             CosmosQueryRequestOptions options = new CosmosQueryRequestOptions();
-            // Step 5: Plug in the compound session token
+            // Plug in the compound session token
             options.setSessionToken(compoundSessionToken);
 
             logger.info("Executing query with compound session token: {}", compoundSessionToken);
@@ -660,12 +658,12 @@ public class QueriesQuickstartAsync {
 
     // Steps:
     // 1. Create multiple documents (some with duplicate partition keys) and collect latest session tokens per partition key.
-    // 2. Build a compound session token by concatenating the session tokens using commas present in partitionKeyToLastRecordedSessionToken.
+    // 2. Build a compound session token by concatenating the session tokens using commas present as values in partitionKeyToLastRecordedSessionToken.
     // 3. Perform a cross-partition query using the compound session token.
     private void queryCrossPartitionAsyncUsingSessionConsistency() {
-        logger.info("Starting cross-partition upserts and session-consistent query.");
+        logger.info("Starting upserts across various logical partitions and a session-consistent query...");
         try {
-            Map<String, String> partitionKeyToLastRecordedSessionToken = upsertMultipleDocumentsCollectSessionTokens(databaseName, containerName, 10);
+            Map<String, String> partitionKeyToLastRecordedSessionToken = upsertMultipleDocumentsAndCollectSessionTokens(databaseName, containerName, 10);
 
             String compoundSessionToken = buildCompoundSessionToken(partitionKeyToLastRecordedSessionToken);
 
