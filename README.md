@@ -22,15 +22,15 @@ Sample code repo for Azure Cosmos DB Java SDK for SQL API. By cloning and runnin
 
 ## Contents
 
-| File/folder       | Description                                |
-|-------------------|--------------------------------------------|
-| `src`             | Java sample source code. Many samples have 'sync' and 'async' variants                |
-| `.gitignore`      | Define what to ignore at commit time.      |
-| `CHANGELOG.md`    | List of changes to the sample.             |
-| `CONTRIBUTING.md` | Guidelines for contributing to the sample. |
-| `README.md`       | This README file.                          |
-| `LICENSE`         | The license for the sample.                |
-| `pom.xml`         | Maven Project Object Model File
+| File/folder       | Description                                                            |
+|-------------------|------------------------------------------------------------------------|
+| `src`             | Java sample source code. Many samples have 'sync' and 'async' variants |
+| `.gitignore`      | Define what to ignore at commit time.                                  |
+| `CHANGELOG.md`    | List of changes to the sample.                                         |
+| `CONTRIBUTING.md` | Guidelines for contributing to the sample.                             |
+| `README.md`       | This README file.                                                      |
+| `LICENSE`         | The license for the sample.                                            |
+| `pom.xml`         | Maven Project Object Model File                                        |
 
 ## Prerequisites
 
